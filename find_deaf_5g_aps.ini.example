@@ -32,8 +32,8 @@ ignore_if_isolated = true
 site_name_filter =
 ; Seconds to pause between API calls (keeps well under 5000 calls/hour)
 pause_between_calls = 0.3
-; Results are appended to this CSV each run
-csv_file = deaf_5g_aps.csv
+; Results are appended to this CSV each run ({org} is replaced with the org name)
+csv_file = deaf_5g_aps_{org}.csv
 ; Folder for the Excel report of failed APs (. = current folder)
-; Filename is deaf_5g_report_<site filter or ALL-SITES>_<date_time>UTC.xlsx
+; Filename is deaf_5g_report_<org name>_<site filter or ALL-SITES>_<date_time>UTC.xlsx
 report_folder = .

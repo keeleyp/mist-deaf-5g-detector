@@ -23,9 +23,9 @@ For every site in the org (or only the sites that match a name filter):
    - also ignores flagged APs whose 5GHz power is 0 (`ignore_if_5g_power_zero`), because no SSIDs are configured on that radio
    - also ignores flagged APs whose 5GHz channel or power is unknown (`ignore_if_5g_unknown`), because there are no 5GHz radio stats to judge them on
    - also ignores flagged APs that no other AP hears on 2.4GHz either (`ignore_if_isolated`), because they are probably just isolated
-5. Prints the results and appends them to a CSV, so repeated runs build a history
-6. Writes an Excel report of the failed APs for that run, e.g. `deaf_5g_report_SITE-01_2026-09-23_1015UTC.xlsx`
-   (the site filter, or ALL-SITES, plus the run time). It has a Failed APs sheet (red = strong evidence,
+5. Prints the results and appends them to a CSV named with the org (`deaf_5g_aps_<org>.csv`), so repeated runs build a history for each org
+6. Writes an Excel report of the failed APs for that run, e.g. `deaf_5g_report_My-Org_SITE-01_2026-09-23_1015UTC.xlsx`
+   (org name, then the site filter or ALL-SITES, then the run time). It has a Failed APs sheet (red = strong evidence,
    amber = weaker) and a Summary sheet
 
 ## Setup

@@ -64,7 +64,8 @@ IGNORE_IF_ISOLATED = config.getboolean("detection", "ignore_if_isolated", fallba
 
 SITE_NAME_FILTER = config.get("run", "site_name_filter", fallback="").strip()
 PAUSE_BETWEEN_CALLS = config.getfloat("run", "pause_between_calls", fallback=0.3)
-CSV_FILE = config.get("run", "csv_file", fallback="deaf_5g_aps.csv").strip()
+# {org} in the name is replaced with the org name, so each org keeps its own history file
+CSV_FILE = config.get("run", "csv_file", fallback="deaf_5g_aps_{org}.csv").strip()
 REPORT_FOLDER = config.get("run", "report_folder", fallback=".").strip() or "."
 
 # -----------------------------------------------------------------
@@ -82,7 +83,26 @@ session.headers.update({"Authorization": "Token " + API_TOKEN})
 run_now = datetime.datetime.now(datetime.timezone.utc)
 run_time = run_now.strftime("%Y-%m-%d %H:%M:%S UTC")
 print("Run started " + run_time)
-print("Org " + ORG_ID + " on " + API_HOST)
+# ---------- look up the org name (used in the CSV and Excel filenames) ----------
+
+org_name = ORG_ID
+while True:
+    resp = session.get(API_HOST + "/api/v1/orgs/" + ORG_ID)
+    if resp.status_code == 429:
+        print("Rate limited getting org, waiting 60s...")
+        time.sleep(60)
+        continue
+    if resp.status_code == 200 and isinstance(resp.json(), dict):
+        org_name = resp.json().get("name", ORG_ID) or ORG_ID
+    else:
+        print("Couldn't look up org name (HTTP " + str(resp.status_code) + ") - using org ID in filenames")
+    break
+
+# Safe version for filenames: letters, digits, _ and - only
+org_file_part = re.sub(r"[^A-Za-z0-9_-]+", "-", org_name).strip("-") or "org"
+CSV_FILE = CSV_FILE.replace("{org}", org_file_part)
+
+print("Org " + org_name + " (" + ORG_ID + ") on " + API_HOST)
 print("")
 
 # ---------- 1. get all sites in the org (paged) ----------
@@ -353,8 +373,8 @@ csv_handle.close()
 
 # ---------- 3. Excel report of the failed APs ----------
 
-# Filename: site filter (or ALL-SITES) + run time, e.g.
-#   deaf_5g_report_SITE-01_2026-09-23_1015UTC.xlsx
+# Filename: org name + site filter (or ALL-SITES) + run time, e.g.
+#   deaf_5g_report_My-Org_SITE-01_2026-09-23_1015UTC.xlsx
 if SITE_NAME_FILTER != "":
     name_part = SITE_NAME_FILTER
 elif len(sites) == 1:
@@ -362,7 +382,8 @@ elif len(sites) == 1:
 else:
     name_part = "ALL-SITES"
 name_part = re.sub(r"[^A-Za-z0-9_-]+", "-", name_part).strip("-")
-report_file = os.path.join(REPORT_FOLDER, "deaf_5g_report_" + name_part + "_" + run_now.strftime("%Y-%m-%d_%H%M") + "UTC.xlsx")
+report_file = os.path.join(REPORT_FOLDER, "deaf_5g_report_" + org_file_part + "_" + name_part + "_"
+                           + run_now.strftime("%Y-%m-%d_%H%M") + "UTC.xlsx")
 
 header_font = Font(bold=True, color="FFFFFF")
 header_fill = PatternFill("solid", fgColor="1F3864")
@@ -416,6 +437,7 @@ ws2["A1"].font = title_font
 ws2.append([])
 summary_rows = [
     ["Run time", run_time],
+    ["Org", org_name],
     ["Org ID", ORG_ID],
     ["Site filter", SITE_NAME_FILTER if SITE_NAME_FILTER != "" else "(all sites)"],
     ["Sites checked", sites_done],

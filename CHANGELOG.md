@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.1.0
+
+- Looks up the org name and uses it in the filenames:
+  - Excel report: `deaf_5g_report_<org>_<site filter or ALL-SITES>_<time>UTC.xlsx`
+  - CSV history: `deaf_5g_aps_<org>.csv` (set by `csv_file`; `{org}` is replaced with the org name)
+- The org name is also shown in the Summary sheet and at the start of each run
+
 ## v1.0.0
 
 First public release.
