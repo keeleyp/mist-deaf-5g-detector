@@ -31,7 +31,7 @@ For every site in the org (or only the sites that match a name filter):
 ## Setup
 
 ```
-pip3 install requests openpyxl
+pip3 install -r requirements.txt
 cp find_deaf_5g_aps.ini.example find_deaf_5g_aps.ini
 # edit find_deaf_5g_aps.ini: add api_token (and org_id / api_host if different)
 python3 find_deaf_5g_aps.py

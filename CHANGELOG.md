@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.1.1
+
+- Adds `requirements.txt` (`requests`, `openpyxl`) so setup is `pip3 install -r requirements.txt`
+
 ## v1.1.0
 
 - Looks up the org name and uses it in the filenames:
