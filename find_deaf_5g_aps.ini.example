@@ -1,0 +1,39 @@
+; Settings for find_deaf_5g_aps.py
+; Copy this file to find_deaf_5g_aps.ini and add your API token.
+; find_deaf_5g_aps.ini is git-ignored so your token is never committed.
+
+[mist]
+; Your Mist cloud API host, e.g. https://api.mist.com (Global 01), https://api.eu.mist.com (EMEA 01),
+; https://api.gc1.mist.com (Global 03) - use the one that matches your dashboard URL
+api_host = https://api.eu.mist.com
+api_token = PASTE_YOUR_API_TOKEN_HERE
+; Your Mist org ID (Organization > Settings in the Mist dashboard)
+org_id = PASTE_YOUR_ORG_ID_HERE
+
+[detection]
+; Flag an AP only if it hears at least this many 5GHz neighbours...
+min_neighbours_heard = 2
+; ...and the strongest one it hears is at least this loud (dBm)
+strongest_rssi_threshold = -75
+; Ignore APs up for less than this many days (RRM won't have run yet)
+min_uptime_days = 1
+; Ignore APs that have clients on 5GHz - the radio must be working (true/false)
+ignore_if_5g_clients = true
+; Ignore APs whose 5GHz power is 0 - no SSIDs configured on that radio (true/false)
+ignore_if_5g_power_zero = true
+; Ignore APs whose 5GHz channel or power is unknown - no 5GHz radio stats (true/false)
+ignore_if_5g_unknown = true
+; Ignore APs not heard by any other AP on 2.4GHz either - probably isolated (true/false)
+ignore_if_isolated = true
+
+[run]
+; Only check sites whose name contains this text (leave blank for all sites)
+; e.g. SITE-01 to test on one site first
+site_name_filter =
+; Seconds to pause between API calls (keeps well under 5000 calls/hour)
+pause_between_calls = 0.3
+; Results are appended to this CSV each run
+csv_file = deaf_5g_aps.csv
+; Folder for the Excel report of failed APs (. = current folder)
+; Filename is deaf_5g_report_<site filter or ALL-SITES>_<date_time>UTC.xlsx
+report_folder = .
