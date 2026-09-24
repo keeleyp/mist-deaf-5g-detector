@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.2.0
+
+- Works behind company HTTPS proxies. It trusts the Windows/macOS certificate store via `truststore`
+  (`use_system_certs`, on by default), or you can set `ca_bundle` to a company root certificate
+- Checks the connection first, so a certificate or proxy problem gives a clear message and not a traceback
+- Adds `truststore` to `requirements.txt`
+
 ## v1.1.1
 
 - Adds `requirements.txt` (`requests`, `openpyxl`) so setup is `pip3 install -r requirements.txt`

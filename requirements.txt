@@ -1,2 +1,3 @@
 requests>=2.25
 openpyxl>=3.0
+truststore>=0.9 ; python_version >= "3.10"

@@ -9,6 +9,10 @@ api_host = https://api.eu.mist.com
 api_token = PASTE_YOUR_API_TOKEN_HERE
 ; Your Mist org ID (Organization > Settings in the Mist dashboard)
 org_id = PASTE_YOUR_ORG_ID_HERE
+; Trust the Windows/macOS certificate store (needed behind most company HTTPS proxies)
+use_system_certs = true
+; Or give the path to your company's root certificate (.pem) instead - leave blank if not needed
+ca_bundle =
 
 [detection]
 ; Flag an AP only if it hears at least this many 5GHz neighbours...

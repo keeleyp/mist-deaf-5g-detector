@@ -37,6 +37,13 @@ cp find_deaf_5g_aps.ini.example find_deaf_5g_aps.ini
 python3 find_deaf_5g_aps.py
 ```
 
+### `CERTIFICATE_VERIFY_FAILED` on a company network
+
+If you see `certificate verify failed: unable to get local issuer certificate`, a company proxy is
+probably inspecting HTTPS traffic. `pip install -r requirements.txt` installs `truststore`, which
+lets the script trust the Windows/macOS certificate store (`use_system_certs = true`, the default).
+You can also set `ca_bundle` in the `.ini` to the path of your company's root certificate (`.pem`).
+
 Use a different settings file: `python3 find_deaf_5g_aps.py other_org.ini`
 
 `find_deaf_5g_aps.ini`, `*.csv` and `*.xlsx` are git-ignored, so tokens and results never get committed.

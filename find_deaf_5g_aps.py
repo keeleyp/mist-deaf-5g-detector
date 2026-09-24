@@ -77,8 +77,54 @@ if ORG_ID == "" or ORG_ID.startswith("PASTE"):
     print("Put the org ID in " + INI_FILE + " ([mist] org_id)")
     sys.exit(1)
 
+# ---------- HTTPS certificate checking ----------
+# On corporate networks a proxy (Zscaler, Netskope, Palo Alto etc.) often re-signs
+# HTTPS traffic with the company's own root certificate. That certificate is in the
+# Windows/macOS certificate store, but not in the bundle Python uses by default,
+# which gives "CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate".
+#   use_system_certs = true -> trust the operating system's certificate store (needs truststore)
+#   ca_bundle = <path>      -> or point at the company root certificate (.pem) instead
+USE_SYSTEM_CERTS = config.getboolean("mist", "use_system_certs", fallback=True)
+CA_BUNDLE = config.get("mist", "ca_bundle", fallback="").strip()
+
+if USE_SYSTEM_CERTS and CA_BUNDLE == "":
+    try:
+        import truststore
+        truststore.inject_into_ssl()
+    except ImportError:
+        print("Note: 'truststore' isn't installed, so the OS certificate store isn't used.")
+        print("      If you get CERTIFICATE_VERIFY_FAILED, run: pip install -r requirements.txt")
+        print("")
+
 session = requests.Session()
 session.headers.update({"Authorization": "Token " + API_TOKEN})
+if CA_BUNDLE != "":
+    if not os.path.exists(CA_BUNDLE):
+        print("ca_bundle file not found: " + CA_BUNDLE)
+        sys.exit(1)
+    session.verify = CA_BUNDLE
+    # requests lets these environment variables override session.verify, so set them too
+    os.environ["REQUESTS_CA_BUNDLE"] = CA_BUNDLE
+    os.environ["CURL_CA_BUNDLE"] = CA_BUNDLE
+
+# Quick connection test, so a certificate/proxy problem gives a clear message
+try:
+    session.get(API_HOST + "/api/v1/self", timeout=30)
+except requests.exceptions.SSLError as e:
+    print("HTTPS certificate check failed connecting to " + API_HOST)
+    print("")
+    print("This usually means a company proxy is inspecting HTTPS traffic. To fix it, either:")
+    print("  1. pip install -r requirements.txt   (installs truststore, so Windows/macOS")
+    print("     certificates are trusted - leave use_system_certs = true in the .ini), or")
+    print("  2. get your company's root certificate as a .pem file and set")
+    print("     ca_bundle = C:\\path\\to\\company-root.pem   under [mist] in the .ini")
+    print("")
+    print("Details: " + str(e))
+    sys.exit(1)
+except requests.exceptions.ConnectionError as e:
+    print("Couldn't connect to " + API_HOST + " - check the api_host setting and network/proxy access.")
+    print("Details: " + str(e))
+    sys.exit(1)
 
 run_now = datetime.datetime.now(datetime.timezone.utc)
 run_time = run_now.strftime("%Y-%m-%d %H:%M:%S UTC")
