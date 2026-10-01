@@ -41,3 +41,11 @@ csv_file = deaf_5g_aps_{org}.csv
 ; Folder for the Excel report of failed APs (. = current folder)
 ; Filename is deaf_5g_report_<org name>_<site filter or ALL-SITES>_<date_time>UTC.xlsx
 report_folder = .
+
+[reset]
+; After the scan, list the failed APs and offer to reset their radio (asks y/N first)
+offer_radio_reset = true
+; Which radios to reset: 5 (default), or 24,5 for both 2.4GHz and 5GHz
+reset_bands = 5
+; Seconds to leave the radio off before turning it back on
+reset_wait_seconds = 5

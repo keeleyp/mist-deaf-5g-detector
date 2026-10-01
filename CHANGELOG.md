@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.3.0
+
+- After the scan, lists the failed APs and offers to reset their radio (asks y/N first). The reset
+  disables the radio, waits `reset_wait_seconds` (default 5), then puts back the original `radio_config`
+- Read-only token: detected from `/self` or from an HTTP 401/403 response. The script shows a clearly
+  marked dry run of what it would have done, and changes nothing
+- Retries the re-enable, warns about any AP left disabled, and still re-enables the radios if you press Ctrl-C
+- New `[reset]` section in the `.ini`, a "Radio reset" column in the Excel report, and reset counts on the Summary sheet
+
 ## v1.2.0
 
 - Works behind company HTTPS proxies. It trusts the Windows/macOS certificate store via `truststore`

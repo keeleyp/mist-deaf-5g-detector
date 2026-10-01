@@ -27,6 +27,7 @@ import time
 import datetime
 import configparser
 import re
+import json
 import requests
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -67,6 +68,14 @@ PAUSE_BETWEEN_CALLS = config.getfloat("run", "pause_between_calls", fallback=0.3
 # {org} in the name is replaced with the org name, so each org keeps its own history file
 CSV_FILE = config.get("run", "csv_file", fallback="deaf_5g_aps_{org}.csv").strip()
 REPORT_FOLDER = config.get("run", "report_folder", fallback=".").strip() or "."
+
+# Offer to reset (disable, wait, re-enable) the radio on the failed APs at the end of the run
+OFFER_RADIO_RESET = config.getboolean("reset", "offer_radio_reset", fallback=True)
+# Which radios to reset: 5 (default), or e.g. 24,5 for both 2.4GHz and 5GHz
+RESET_BANDS = ["band_" + b.strip() for b in config.get("reset", "reset_bands", fallback="5").split(",") if b.strip() in ("24", "5", "6")]
+if len(RESET_BANDS) == 0:
+    RESET_BANDS = ["band_5"]
+RESET_WAIT_SECONDS = config.getfloat("reset", "reset_wait_seconds", fallback=5)
 
 # -----------------------------------------------------------------
 
@@ -190,6 +199,7 @@ if not csv_exists:
     ])
 
 report_rows = []
+failed_aps = []
 total_suspects = 0
 total_ignored_uptime = 0
 total_ignored_clients = 0
@@ -413,11 +423,241 @@ for site in sites:
             s["strongest_mac"], heard_24,
         ])
 
+        failed_aps.append({
+            "site_id": site_id, "site_name": site_name,
+            "name": dev.get("name", "") or s["mac"], "mac": s["mac"],
+        })
+
     csv_handle.flush()
 
 csv_handle.close()
 
-# ---------- 3. Excel report of the failed APs ----------
+# ---------- 3. offer to reset the radios on the failed APs ----------
+#
+# Turning the radio off and on again clears the stuck state (the same thing an RRM
+# channel change does). This shows the failed APs, asks for confirmation, then:
+#   1. disables the radio(s) in reset_bands on every failed AP
+#   2. waits reset_wait_seconds
+#   3. puts each AP's original radio_config back (which re-enables the radio)
+# With a read-only API token nothing can be changed, so it shows what WOULD
+# have been done and says clearly that nothing was changed.
+
+reset_result_by_mac = {}
+reset_done = 0
+reset_failed = 0
+reset_mode = "not offered"
+
+if OFFER_RADIO_RESET and len(failed_aps) > 0:
+    print("")
+    print("==== Radio reset ====")
+    print("")
+    print("APs with a stuck 5GHz radio (" + str(len(failed_aps)) + "):")
+    n = 0
+    for ap in sorted(failed_aps, key=lambda a: (a["site_name"], a["name"])):
+        n = n + 1
+        print("  " + str(n).rjust(3) + ". " + ap["site_name"] + "  /  " + ap["name"] + "  (" + ap["mac"] + ")")
+    print("")
+
+    # --- can this token write? Check /self first, then find out for sure on the first change ---
+    can_write = None          # None = unknown, True = has write rights, False = read-only
+    resp = session.get(API_HOST + "/api/v1/self")
+    if resp.status_code == 200 and isinstance(resp.json(), dict):
+        org_role = ""
+        for priv in resp.json().get("privileges", []) or []:
+            if priv.get("scope") == "org" and priv.get("org_id") == ORG_ID:
+                org_role = priv.get("role", "")
+        if org_role in ("admin", "write"):
+            can_write = True
+        elif org_role != "":
+            # read / helpdesk / installer etc. at org level - can't change AP config
+            # (site-level write rights would still be caught by the first change below)
+            can_write = False
+            for priv in resp.json().get("privileges", []) or []:
+                if priv.get("scope") == "site" and priv.get("role") in ("admin", "write"):
+                    can_write = None
+
+    band_names = ", ".join([b.replace("band_24", "2.4GHz").replace("band_5", "5GHz").replace("band_6", "6GHz") for b in RESET_BANDS])
+
+    if can_write is False:
+        print("NOTE: this API token is READ-ONLY for this org, so the radios can't be changed.")
+        print("      If you continue, the script will show what it WOULD do - nothing will be changed.")
+        print("")
+
+    answer = ""
+    try:
+        answer = input("Reset the " + band_names + " radio on these " + str(len(failed_aps))
+                       + " APs (off, wait " + str(RESET_WAIT_SECONDS) + "s, back on)? [y/N]: ").strip().lower()
+    except EOFError:
+        print("")
+        print("No keyboard input available (running unattended?) - skipping the radio reset.")
+
+    if answer not in ("y", "yes"):
+        print("Radio reset skipped - no changes made.")
+        reset_mode = "skipped by user"
+        for ap in failed_aps:
+            reset_result_by_mac[ap["mac"]] = "Not reset (skipped)"
+    else:
+        dry_run = (can_write is False)
+        reset_mode = "dry run (read-only token)" if dry_run else "live"
+
+        # --- read each AP's current radio_config, so it can be put back exactly ---
+        for ap in failed_aps:
+            ap["device_id"] = "00000000-0000-0000-1000-" + ap["mac"]
+            ap["original_rc"] = None
+            ap["disabled_ok"] = False
+            while True:
+                resp = session.get(API_HOST + "/api/v1/sites/" + ap["site_id"] + "/devices/" + ap["device_id"])
+                if resp.status_code == 429:
+                    print("  rate limited, waiting 60s...")
+                    time.sleep(60)
+                    continue
+                break
+            if resp.status_code == 200:
+                ap["original_rc"] = resp.json().get("radio_config") or {}
+            else:
+                print("  [FAILED] " + ap["site_name"] + " / " + ap["name"] + ": couldn't read device config (HTTP "
+                      + str(resp.status_code) + ") - this AP will be left alone")
+                reset_result_by_mac[ap["mac"]] = "Not reset (couldn't read config, HTTP " + str(resp.status_code) + ")"
+                reset_failed = reset_failed + 1
+            time.sleep(PAUSE_BETWEEN_CALLS)
+
+        # --- step 1: disable ---
+        print("")
+        if dry_run:
+            print("*" * 78)
+            print("*  DRY RUN - READ-ONLY TOKEN - NOTHING BELOW WAS ACTUALLY CHANGED             *")
+            print("*" * 78)
+        print("Step 1/3  " + datetime.datetime.now().strftime("%H:%M:%S") + "  disabling " + band_names + " radio")
+        for ap in failed_aps:
+            if ap["original_rc"] is None:
+                continue
+            new_rc = json.loads(json.dumps(ap["original_rc"]))
+            for band in RESET_BANDS:
+                band_cfg = new_rc.get(band) or {}
+                band_cfg["disabled"] = True
+                new_rc[band] = band_cfg
+            ap["disable_rc"] = new_rc
+            url = API_HOST + "/api/v1/sites/" + ap["site_id"] + "/devices/" + ap["device_id"]
+
+            if dry_run:
+                print("  [WOULD DISABLE - NOT DONE] " + ap["site_name"] + " / " + ap["name"])
+                print("        PUT " + url.replace(API_HOST, ""))
+                print("        " + json.dumps({"radio_config": {b: new_rc[b] for b in RESET_BANDS}}))
+                continue
+
+            while True:
+                resp = session.put(url, json={"radio_config": new_rc})
+                if resp.status_code == 429:
+                    print("  rate limited, waiting 60s...")
+                    time.sleep(60)
+                    continue
+                break
+            if resp.status_code == 200:
+                ap["disabled_ok"] = True
+                print("  [OK]     " + datetime.datetime.now().strftime("%H:%M:%S") + "  " + ap["site_name"] + " / " + ap["name"] + "  -> radio disabled")
+            elif resp.status_code in (401, 403):
+                # Token turned out to be read-only - switch to dry run for the rest
+                print("  [DENIED] " + ap["site_name"] + " / " + ap["name"] + "  -> HTTP " + str(resp.status_code)
+                      + " - this API token has no write access")
+                dry_run = True
+                reset_mode = "dry run (read-only token)"
+                print("")
+                print("*" * 78)
+                print("*  READ-ONLY TOKEN - switching to DRY RUN. NOTHING BELOW WAS ACTUALLY CHANGED *")
+                print("*" * 78)
+                print("  [WOULD DISABLE - NOT DONE] " + ap["site_name"] + " / " + ap["name"])
+                print("        PUT " + url.replace(API_HOST, ""))
+                print("        " + json.dumps({"radio_config": {b: new_rc[b] for b in RESET_BANDS}}))
+            else:
+                print("  [FAILED] " + ap["site_name"] + " / " + ap["name"] + "  -> HTTP " + str(resp.status_code)
+                      + " " + resp.text[:200] + " - NOT changed")
+                reset_result_by_mac[ap["mac"]] = "Not reset (disable failed, HTTP " + str(resp.status_code) + ")"
+                reset_failed = reset_failed + 1
+            time.sleep(PAUSE_BETWEEN_CALLS)
+
+        # --- step 2: wait ---
+        any_disabled = len([ap for ap in failed_aps if ap["disabled_ok"]]) > 0
+        if any_disabled or dry_run:
+            prefix = "(dry run) " if dry_run and not any_disabled else ""
+            print("Step 2/3  " + datetime.datetime.now().strftime("%H:%M:%S") + "  " + prefix + "waiting " + str(RESET_WAIT_SECONDS) + " seconds...")
+            if any_disabled:
+                try:
+                    time.sleep(RESET_WAIT_SECONDS)
+                except KeyboardInterrupt:
+                    # Never leave radios switched off - carry straight on to re-enable them
+                    print("  Interrupted - re-enabling the radios now")
+
+        # --- step 3: re-enable by putting the original radio_config back ---
+        print("Step 3/3  " + datetime.datetime.now().strftime("%H:%M:%S") + "  re-enabling " + band_names + " radio")
+        left_disabled = []
+        for ap in failed_aps:
+            if ap["original_rc"] is None:
+                continue
+            url = API_HOST + "/api/v1/sites/" + ap["site_id"] + "/devices/" + ap["device_id"]
+
+            if dry_run and not ap["disabled_ok"]:
+                print("  [WOULD RE-ENABLE - NOT DONE] " + ap["site_name"] + " / " + ap["name"])
+                print("        PUT " + url.replace(API_HOST, ""))
+                print("        " + json.dumps({"radio_config": {b: ap["original_rc"].get(b, {}) for b in RESET_BANDS}}) + "   (original config put back)")
+                reset_result_by_mac[ap["mac"]] = "DRY RUN - would have reset (NOT done, read-only token)"
+                continue
+            if not ap["disabled_ok"]:
+                continue
+
+            ok = False
+            tries = 0
+            while tries < 5:
+                tries = tries + 1
+                try:
+                    resp = session.put(url, json={"radio_config": ap["original_rc"]})
+                except requests.exceptions.RequestException as e:
+                    print("  retrying " + ap["name"] + " after error: " + str(e))
+                    time.sleep(5)
+                    continue
+                if resp.status_code == 429:
+                    print("  rate limited, waiting 60s...")
+                    time.sleep(60)
+                    continue
+                if resp.status_code == 200:
+                    ok = True
+                    break
+                print("  retrying " + ap["name"] + " after HTTP " + str(resp.status_code))
+                time.sleep(5)
+            if ok:
+                print("  [OK]     " + datetime.datetime.now().strftime("%H:%M:%S") + "  " + ap["site_name"] + " / " + ap["name"] + "  -> radio re-enabled")
+                reset_result_by_mac[ap["mac"]] = "Reset OK " + datetime.datetime.now().strftime("%H:%M:%S")
+                reset_done = reset_done + 1
+            else:
+                print("  [FAILED] " + ap["site_name"] + " / " + ap["name"] + "  -> could NOT re-enable the radio!")
+                reset_result_by_mac[ap["mac"]] = "RADIO LEFT DISABLED - re-enable manually"
+                reset_failed = reset_failed + 1
+                left_disabled.append(ap)
+            time.sleep(PAUSE_BETWEEN_CALLS)
+
+        print("")
+        if dry_run:
+            print("*" * 78)
+            if reset_done == 0:
+                print("*  DRY RUN ONLY - the API token is read-only, so NO radios were changed.      *")
+            else:
+                print("*  PARTLY DRY RUN - " + str(reset_done).ljust(3) + " AP(s) were reset before write access was refused; *")
+                print("*  the rest were NOT changed.                                                *")
+            print("*  Use a token with write access to the org to actually reset them.          *")
+            print("*" * 78)
+        else:
+            print("Radio reset finished: " + str(reset_done) + " reset OK, " + str(reset_failed) + " not reset")
+        if len(left_disabled) > 0:
+            print("")
+            print("!!! WARNING: these APs still have the radio DISABLED - re-enable them in the Mist dashboard:")
+            for ap in left_disabled:
+                print("!!!   " + ap["site_name"] + " / " + ap["name"] + "  (" + ap["mac"] + ")")
+
+for ap in failed_aps:
+    if ap["mac"] not in reset_result_by_mac:
+        reset_result_by_mac[ap["mac"]] = "Not reset"
+
+
+# ---------- 4. Excel report of the failed APs ----------
 
 # Filename: org name + site filter (or ALL-SITES) + run time, e.g.
 #   deaf_5g_report_My-Org_SITE-01_2026-09-23_1015UTC.xlsx
@@ -446,6 +686,7 @@ headers = [
     "Site", "AP name", "AP MAC", "Model", "Firmware", "Uptime (days)", "Status",
     "5GHz channel", "5GHz power", "5GHz clients", "2.4GHz clients",
     "5GHz neighbours heard", "Strongest heard RSSI", "Strongest heard AP", "Heard by (2.4GHz)",
+    "Radio reset",
 ]
 ws.append(headers)
 for cell in ws[1]:
@@ -459,6 +700,7 @@ if len(report_rows) == 0:
 else:
     report_rows.sort(key=lambda r: (str(r[0]), str(r[1])))
     for r in report_rows:
+        r = r + [reset_result_by_mac.get(r[2], "Not reset")]
         ws.append(r)
         row_num = ws.max_row
         # Colour by how strong the evidence is: hears a neighbour loudly but nobody hears it
@@ -470,7 +712,7 @@ else:
         for col in range(1, len(headers) + 1):
             ws.cell(row=row_num, column=col).fill = fill
 
-widths = [28, 22, 15, 8, 14, 10, 12, 10, 10, 10, 10, 12, 12, 16, 12]
+widths = [28, 22, 15, 8, 14, 10, 12, 10, 10, 10, 10, 12, 12, 16, 12, 34]
 for i in range(len(widths)):
     ws.column_dimensions[chr(65 + i)].width = widths[i]
 ws.freeze_panes = "A2"
@@ -497,6 +739,10 @@ summary_rows = [
     ["Ignored - 5GHz channel/power unknown", total_ignored_unknown],
     ["Ignored - isolated (not heard on 2.4GHz)", total_ignored_isolated],
     [],
+    ["Radio reset", reset_mode],
+    ["Radios reset OK", reset_done],
+    ["Radios not reset", reset_failed],
+    [],
     ["Detection rule", "Hears >= " + str(MIN_NEIGHBOURS_HEARD) + " 5GHz neighbours, strongest >= "
         + str(STRONGEST_RSSI_THRESHOLD) + " dBm, heard by 0 APs on 5GHz"],
     ["Colour key", "Red = strongest heard RSSI >= -65 dBm (strong evidence); Amber = weaker"],
@@ -512,7 +758,7 @@ ws2.column_dimensions["B"].width = 90
 os.makedirs(REPORT_FOLDER, exist_ok=True)
 wb.save(report_file)
 
-# ---------- 4. summary ----------
+# ---------- 5. summary ----------
 
 print("")
 print("==== Summary ====")
@@ -525,5 +771,6 @@ print("Ignored (has 5GHz clients): " + str(total_ignored_clients))
 print("Ignored (5GHz power 0):     " + str(total_ignored_power))
 print("Ignored (5GHz ch/pwr unknown): " + str(total_ignored_unknown))
 print("Ignored (isolated - not heard on 2.4GHz): " + str(total_ignored_isolated))
+print("Radio reset:              " + reset_mode + (" (" + str(reset_done) + " OK, " + str(reset_failed) + " not reset)" if reset_mode == "live" else ""))
 print("Results appended to:      " + CSV_FILE)
 print("Excel report:             " + report_file)

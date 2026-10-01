@@ -28,6 +28,31 @@ For every site in the org (or only the sites that match a name filter):
    (org name, then the site filter or ALL-SITES, then the run time). It has a Failed APs sheet (red = strong evidence,
    amber = weaker) and a Summary sheet
 
+## Radio reset (optional)
+
+Once the scan has finished, the script lists the failed APs and asks:
+
+```
+Reset the 5GHz radio on these 3 APs (off, wait 5.0s, back on)? [y/N]:
+```
+
+If you answer `y`, it does three things:
+1. Disables the radio on every failed AP (`PUT /sites/{site_id}/devices/{device_id}`, `radio_config.<band>.disabled = true`)
+2. Waits `reset_wait_seconds`
+3. Puts back each AP's original `radio_config`, which re-enables the radio
+
+Each step is timestamped in the output. The result for each AP goes in the Excel report's "Radio reset" column.
+
+- **Read-only API token:** nothing can be changed. The script shows exactly what it *would* have sent and
+  marks it clearly as a **DRY RUN, nothing changed**. It detects this from `/self`, or from the first
+  HTTP 401/403 response.
+- **Radio failed to come back on:** the script retries 5 times. If it still fails, it lists the AP in a
+  warning, so you can re-enable it in the dashboard.
+- **Ctrl-C during the wait:** the script still turns the radios back on.
+- **Running unattended (no keyboard):** the reset is skipped.
+- **Settings:** under `[reset]` in the `.ini`, set `offer_radio_reset`, `reset_bands` (`5`, or `24,5`)
+  and `reset_wait_seconds`.
+
 ## Setup
 
 ```
